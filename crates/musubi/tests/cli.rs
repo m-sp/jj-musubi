@@ -1537,9 +1537,9 @@ fn hub_join_sync_clone_and_list() {
 
           --hub <HUB>
               The hub, as `musubi hub` prints it: the name this machine ssh-es to the hub's machine by,
-              or on that machine, the hub's directory, or the machine's name or `localhost`, for the hub
-              `musubi hub` serves there without `--dir`, reached without ssh [default: this machine's
-              default hub]
+              its address on a tailnet, as `tailnet:<node ID>@<IPv4 address>`, or on that machine, the
+              hub's directory, or the machine's name or `localhost`, for the hub `musubi hub` serves
+              there without `--dir`, reached without ssh [default: this machine's default hub]
 
       -h, --help
               Print help (see a summary with '-h')
@@ -6024,4 +6024,86 @@ fn publication_budget_inspection_cleanup_and_override() {
     alpha.jj(&["undo"]);
     let outgoing = musubi_in(&env, &logs, &alpha, &["sync", "--outgoing"]);
     insta::assert_snapshot!(outgoing.lines().last().unwrap(), @"Cleanup unavailable: jj did not record enough information to preserve an earlier command's changes.");
+}
+
+/// A hub on a tailnet is reached through this machine's daemon, which holds its tailnet
+/// device: without the daemon, commands say so at once, and joining starts it. No test joins
+/// a tailnet: here an auth key file that is set but missing stops the device before it
+/// contacts anything.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_tailnet_hub_is_reached_through_the_daemon() {
+    let env = TestEnv::new();
+    let _filters = snapshot_filters(&env);
+    let mut logs = Logs::default();
+    let mut daemons = Daemons::default();
+    let alpha = env.init_repo("alpha");
+    logs.daemon_of(&env, &alpha);
+    daemons.of(&alpha);
+    alpha.write_file("a", "a");
+    alpha.jj(&["commit", "-m", "start"]);
+    let hub = "tailnet:nExample1CNTRL@100.64.0.1";
+
+    let err = musubi_fails(&env, &logs, &alpha, &["hub", "remove", "app", "--hub", hub]);
+    insta::assert_snapshot!(err, @"
+    Error: the daemon isn't running
+    Hint: `musubi daemon start` starts it
+    ");
+
+    let key = env.root().join("missing-auth-key");
+    alpha.jj(&[
+        "config",
+        "set",
+        "--user",
+        "musubi.tailnet.auth-key-file",
+        key.to_str().unwrap(),
+    ]);
+    let err = musubi_fails(&env, &logs, &alpha, &["create", "--hub", hub]);
+    insta::assert_snapshot!(err, @"Error: this machine's tailnet node: can't read musubi.tailnet.auth-key-file, $ROOT/missing-auth-key: No such file or directory (os error 2)");
+    // Started by joining, it now says why the hub is out of reach.
+    alpha.jj(&["config", "set", "--user", "musubi.hub", hub]);
+    let list = musubi_in(&env, &logs, &alpha, &["list"]);
+    insta::assert_snapshot!(list, @"
+    Hub tailnet:nExample1CNTRL@100.64.0.1: the hub at tailnet:nExample1CNTRL@100.64.0.1 is out of reach: this machine's tailnet node: can't read musubi.tailnet.auth-key-file, $ROOT/missing-auth-key: No such file or directory (os error 2). This machine's copies:
+    Daemon: running, serving 0 repositories; doesn't start at login; `musubi daemon install` makes it
+    ");
+
+    let err = musubi_fails(
+        &env,
+        &logs,
+        &alpha,
+        &["create", "--hub", "tailnet:laptop@100.64.0.1"],
+    );
+    insta::assert_snapshot!(err, @r#"Error: "tailnet:laptop@100.64.0.1" isn't a hub's tailnet address, which is like tailnet:nExample1CNTRL@100.64.0.1"#);
+
+    // A hub whose tailnet device can't start serves its socket all the same, and says why.
+    let machine = env.init_repo("hub-machine");
+    // Each machine has config of its own: without a key file set, its device would try to
+    // reach the tailnet.
+    machine.jj(&["config", "set", "--user", "musubi.tailnet.allow", "[]"]);
+    machine.jj(&[
+        "config",
+        "set",
+        "--user",
+        "musubi.tailnet.auth-key-file",
+        key.to_str().unwrap(),
+    ]);
+    let hub = Hub::start_on(&env, &mut logs, &machine);
+    // Until it is on the tailnet, it says ssh works too.
+    insta::assert_snapshot!(hub.printed.join("\n"), @"
+    Created a new hub in $ROOT/data/musubi/hub
+    Other machines reach this hub over the tailnet, with the commands it prints once it is on it, or over ssh, with --hub $HOST, or the name they ssh to this machine by.
+    On this machine, leave out --hub.
+    ");
+    let log = env.root().join("hub.log");
+    wait_for(&logs, "the hub to say why it isn't on the tailnet", || {
+        fs::read_to_string(&log)
+            .is_ok_and(|log| log.contains("can't read musubi.tailnet.auth-key-file"))
+    });
+    let list = musubi_in(&env, &logs, &machine, &["list"]);
+    insta::assert_snapshot!(list, @"
+    Hub $ROOT/data/musubi/hub:
+    Daemon: not running (doesn't start at login; `musubi daemon install` makes it); `musubi daemon start` starts it
+    ");
+    drop(hub);
 }

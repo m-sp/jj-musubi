@@ -51,6 +51,9 @@ whoami.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+tailscale.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 widestring.workspace = true
 
@@ -60,6 +63,10 @@ musubi-testutil.workspace = true
 postcard.workspace = true
 termlens.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+# Its umask, to test directories that must be private whatever it is.
+rustix = { workspace = true, features = ["fs"] }
 
 [lints]
 workspace = true

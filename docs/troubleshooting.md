@@ -76,6 +76,31 @@ On the hub's machine, check that `musubi hub` is running and inspect its
 For a hub that stops at logout or reboot, see
 [service setup](guides/setup.md#keep-the-hub-running).
 
+### Over a tailnet
+
+A hub whose address starts with `tailnet:` is reached through this machine's daemon, so
+commands fail while it is stopped: run `musubi daemon start`. Then:
+
+- `the hub refused this machine's tailnet node`: add the ID it names to
+  `musubi.tailnet.allow` on the hub's machine. If it is listed already, the list may have an
+  entry that isn't a device ID, such as a name, which makes the hub admit nobody until it is
+  fixed: the hub's log says `admitting no tailnet node`, and why.
+- `waits for a login`: open the URL it gives, or set `musubi.tailnet.auth-key-file` and run
+  `musubi daemon restart`.
+- `didn't answer over the tailnet`, or `no node this machine may reach has that address`:
+  check on the hub's machine that `musubi hub` is running and printed that address, and in
+  your tailnet's admin console that both devices are connected and its access controls let
+  this one reach the hub's on TCP port 7575.
+- `is now node ..., not the hub's node`: the address belongs to another device now. Join at
+  the hub's new address, as `musubi hub` prints it.
+
+The hub's own device may need logging in again, as after its key expired: no machine reaches
+the hub, and the hub's output or log says `To add this hub to the tailnet, log in at` and a
+URL. Open it, or set `musubi.tailnet.auth-key-file` and restart the hub.
+
+The daemon's and the hub's logs say what their tailnet devices do; `musubi status` shows the
+last error.
+
 For an incompatible protocol or a daemon running an older build, follow
 [Upgrade jj-musubi](guides/upgrading.md). The hub and machines need the same release or source
 build. For a missing hive on a replaced hub, follow

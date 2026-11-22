@@ -156,6 +156,7 @@ pub fn join(
     let node = located.open_as(&settings, machine.clone())?;
     let (request, remotes) = request(&located, &node, choice, &machine)?;
     drop(node);
+    crate::tailnet::start_daemon(&hub, socket)?;
     let asked = block_on(ask_preparing(ui, &hub, HubWideRequest::Join(request)));
     // The repository has history of a hive reset since, which joining would bring back.
     let asked = match asked {
@@ -315,13 +316,16 @@ fn fetch_join_conflicts(ui: &Ui, located: &Located, socket: &Socket) -> anyhow::
 fn exact_pattern(name: &str) -> String {
     format!("exact:{}", RefName::new(name).as_symbol())
 }
-/// Asks `hub`, over ssh first making sure this machine's key works there.
+/// Asks `hub`, first making sure this machine can reach it: over ssh, that its key works
+/// there, or over a tailnet, that the hub admits it.
 pub(crate) async fn ask_preparing(
     ui: &Ui,
     hub: &str,
     request: HubWideRequest,
 ) -> anyhow::Result<HubWideReply> {
-    if !hub::is_local(hub) {
+    if let Some(address) = crate::tailnet::Address::parse(hub) {
+        crate::tailnet::prepare(ui, &address?).await?;
+    } else if !hub::is_local(hub) {
         ssh::prepare(ui, hub).await?;
     }
     hub::ask(hub, request).await
@@ -573,6 +577,7 @@ pub fn clone(
         check_clone_destination(destination)?;
     }
     let hub = UserState::hub(hub)?;
+    crate::tailnet::start_daemon(&hub, socket)?;
     configured_forget_after(&settings::user_config()?)?;
     let reply = block_on(ask_preparing(
         ui,

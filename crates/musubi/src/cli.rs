@@ -424,9 +424,9 @@ pub struct Member {
     #[arg(long, value_name = "DURATION", value_parser = parse_lease)]
     pub lease: Option<Duration>,
     /// The hub, as `musubi hub` prints it: the name this machine ssh-es to the hub's machine
-    /// by, or on that machine, the hub's directory, or the machine's name or `localhost`, for
-    /// the hub `musubi hub` serves there without `--dir`, reached without ssh [default: this
-    /// machine's default hub].
+    /// by, its address on a tailnet, as `tailnet:<node ID>@<IPv4 address>`, or on that machine,
+    /// the hub's directory, or the machine's name or `localhost`, for the hub `musubi hub`
+    /// serves there without `--dir`, reached without ssh [default: this machine's default hub].
     #[arg(long, add = ArgValueCandidates::new(completion::hubs))]
     pub hub: Option<String>,
 }

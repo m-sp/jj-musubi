@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Machines can reach a hub over a Tailscale tailnet instead of ssh, on Linux and macOS, with
+  tailscale-rs inside jj-musubi: no `tailscaled` and no ssh server. On the hub's machine,
+  setting `musubi.tailnet.allow` puts the hub on the tailnet, admitting only the device IDs
+  it lists, which it rereads every few seconds; `musubi hub` prints the address other
+  machines join with, `--hub tailnet:<node ID>@<address>`. A machine reaches such a hub
+  through its daemon, so with the daemon stopped, commands other than `create`, `join` and
+  `clone`, which start it, fail, saying to run `musubi daemon start`. [Or connect over a
+  tailnet](docs/guides/setup.md#or-connect-over-a-tailnet) sets it up. tailscale-rs is
+  preview software, not yet audited. Hubs reached over ssh or on the same machine work as
+  before. A hub address with `tailnet:` means nothing to an earlier release, which would
+  take it for an ssh name: upgrade every machine that uses one.
+
 - A repo with a workspace of yours whose name has a `/`, such as `feat/x`, doesn't sync until
   you rename it, since other machines show each other's workspaces by names like
   `laptop/default`. Before, other machines showed it as `laptop/feat/x`. `musubi sync`,

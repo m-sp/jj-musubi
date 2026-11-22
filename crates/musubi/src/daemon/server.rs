@@ -230,6 +230,7 @@ pub(super) async fn listen(
 ) -> anyhow::Result<Option<&'static Path>> {
     let copies = UserState::load()?.copies;
     let mut listener = socket.listen()?;
+    let _tailnet = crate::tailnet::Bridge::listen();
     // Before reading what is bound, so that a deletion in between is news.
     let mut gone = watch_socket(socket);
     let mut bound = socket.file();

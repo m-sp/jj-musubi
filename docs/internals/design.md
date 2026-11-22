@@ -1088,6 +1088,73 @@ take, about every 100 KB of an upload, so a minute without a word from it means 
 carried under about 20 kbit/s for that minute, well under the 70 kbit/s a chunk needs to arrive
 within its deadline. ssh's errors remain available in the copy's sync status.
 
+### Reaching a hub over a tailnet
+
+A hub's tailnet address, `tailnet:<node ID>@<IPv4 address>`, is reached with tailscale-rs,
+pinned at 0.7.1, a preview whose security musubi relies on, and which musubi doesn't patch.
+The processes that hold connections hold the tailnet devices, and no new one does: on a
+machine, the daemon, which commands and its own copies reach through `tailnet/daemon.sock` in
+the state directory, and which starts its device the first time it is asked; on the hub's
+machine, the hub, once `musubi.tailnet.allow` is known to be set (not while jj's config can't
+be read), serving each admitted connection as one to its socket. With the daemon stopped,
+nothing reaches a tailnet hub; `create`, `join` and `clone` start it. Every daemon listens on
+that socket, and listens there again if it goes, as on its control socket, though it runs no
+tailscale-rs until asked: binding it only on demand would race a `join` that has just started
+the daemon.
+
+ssh's restricted key is the whole of a hub's access control, so a tailnet link has its own.
+A device is known by its stable node ID, which the tailnet's control server assigns and no
+device chooses, unlike its name. tailscale-rs drops a packet whose inner source address
+isn't routed to the WireGuard peer that sent it, so the address a connection comes from says
+which device it is, as long as the lookup by address and the source filter, which goes by
+accepted routes, agree: the gate (`crates/musubi/src/tailnet/gate.rs`) requires exactly one
+peer to own and to be routed the address, with a key that hasn't expired and a home relay,
+and admits it only if the allow list names it. It identifies the device again every 5
+seconds, and at each change to the list, which the hub rereads, ending a connection at once
+whose address has passed to another device, or which the list no longer admits. A lookup the
+device doesn't answer, as when it is busy, ends a connection only once it has gone on not
+answering for as long as a silent peer would. A machine checks the same of the hub, whose ID
+its address names, before connecting and after.
+
+That source check holds only while tailscale-rs's bookkeeping does: after a panic in its peer
+tracker, which kameo restarts empty, peer ids are dealt out again while WireGuard sessions
+keep theirs, and one peer's packets could pass for another's. So each device runs on a tokio
+runtime of its own, whose threads a panic hook marks untrusted before anything unwinds, also
+waking the supervisor: from then on nothing is read from the device and nothing is identified
+by it, and the runtime is dropped whole and a new device started from the same keys. What
+musubi had already written to the device's sockets can still go out in the moment before
+the runtime is dropped: without patching tailscale-rs, nothing stops its network stack
+sending what it has buffered. Panics elsewhere in the process, which musubi catches on
+purpose, are left as they were.
+
+tailscale-rs tells no dead link: a TCP stream to a peer that was suspended or killed gives no
+error and no end, and writes succeed until its buffer fills. So what a tailnet link carries
+is framed (`musubi_transport::heartbeat`), and a side that has heard nothing for 45 seconds,
+whatever it is doing, ends it, failing every request in flight on it, as ssh does within a
+minute. Its shutdown does nothing, and a socket closed with bytes unread can keep both ends
+from closing, so a side that has finished says so in a frame and reads until the other
+closes. The link is read through a buffer as large as its socket's, so that a frame and its
+header are one round trip to the device's network stack, not two.
+
+tailscale-rs never frees a socket whose peer has gone, nor one whose connect was given up
+on: each holds 128 KiB, and retransmits, for the life of the device. So connects are never
+cancelled, and one at a time goes to each address. Every connection that may have been
+stranded so counts, whether it was carried, turned away or refused: a refused peer is told
+and waited for to close, and counts only if it doesn't. A device is replaced, which frees
+them all, once 64 have been counted; once it has reached nothing for five minutes with
+nothing using it, which on a machine means its hub didn't answer, while a hub's client going
+silent, as one asleep does, is the client's doing; after the machine sleeps for over a
+minute; and when it stops answering for five minutes. A device that the tailnet lets reach a
+hub's port, but that the hub doesn't admit, can still have the hub's device replaced, with 64
+connections it never closes: past 16 refusals in ten minutes, its connections are dropped
+unanswered, which spares the hub the work and its log the lines, though they still count.
+Only the tailnet's access controls keep such a device away.
+
+tailscale-rs re-handshakes only from a side that sends, so a client could keep sending into
+a session the hub's replaced device no longer has, for up to three minutes: a hub's new
+device sends a datagram to each device it has served, recorded with its address, which has
+the device start the handshake.
+
 ## Local integration
 
 Each user runs one daemon, with an independent worker for each repository in its state file.

@@ -42,6 +42,8 @@ postcard = { version = "1", default-features = false, features = ["use-std"] }
 process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 tempfile = "3"
 termlens = { version = "0.11.10", default-features = false }
+# Exact: preview software, whose minor releases break its API, and whose security musubi relies on.
+tailscale = "=0.7.1"
 # jj-lib's, so that musubi builds no second copy.
 gix = { version = "0.90", default-features = false }
 # Exact: a `reproduce_failure` blob replays only with the version of Hegel that made it.

@@ -380,6 +380,13 @@ trusted backup, or run `musubi join --hub <hub-host>` interactively in each clie
 authorize its key again. An unattended daemon cannot answer an SSH password or host-key
 prompt. Test `ssh <hub-host> musubi --version` before expecting daemons to reconnect.
 
+For a hub on a tailnet, set `musubi.tailnet.allow` on the new machine as on the old one. Its
+hub gets a tailnet device of its own, with a new ID, so a new address: join it from each
+copy with `musubi join --hub` and the address the new hub prints, as for a hub at another
+address, below. Or carry `tailnet/hub/keys.json` from the old machine's state directory to
+the new one's, which keeps the address, but only once the old hub is stopped for good: two
+hubs with the same keys on one tailnet would take each other's connections.
+
 In one surviving copy of each hive, run:
 
 ```sh

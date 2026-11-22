@@ -14,7 +14,8 @@ You need a few prerequisites on every machine:
 
 - jj-musubi, which provides the `musubi` command. See [Install jj-musubi](#install-jj-musubi).
 - `jj` and `git`.
-- [ssh access](#connect-over-ssh) from every machine to the hub machine.
+- [ssh access](#connect-over-ssh) from every machine to the hub machine, or [a
+  tailnet](#or-connect-over-a-tailnet) they share.
 
 Use a jj repo with at least one commit and complete history (shallow and partial clones are not
 supported). To try things out, I recommend you use a disposable clone of some project.
@@ -70,6 +71,79 @@ After that, the daemon uses this key and should never prompt.
 To be very clear, jj-musubi is intended for use by just one person (and their agents). Anyone
 who can talk to a hub can read and write every hive on it ([SECURITY.md](../../SECURITY.md)).
 See [SSH configuration](../reference/configuration.md#ssh) for more details.
+
+## Or connect over a tailnet
+
+Instead of ssh, machines can reach the hub over a [Tailscale](https://tailscale.com) tailnet,
+through tailscale-rs, which runs inside jj-musubi: no `tailscaled` and no ssh server are
+needed. On Linux and macOS only. tailscale-rs is preview software, which its authors
+haven't had audited.
+
+Each musubi process that uses the tailnet is a device on it, with an ID of its own: the hub's,
+and on every other machine, the daemon's. A hub admits only the IDs you list, and as over ssh,
+a machine it admits can read and write every hive on it ([SECURITY.md](../../SECURITY.md)).
+
+1. On the hub's machine, turn the hub's tailnet device on, admitting nobody yet, and start the
+   hub:
+
+   ```sh
+   jj config set --user musubi.tailnet.allow '[]'
+   musubi hub
+   ```
+
+   It prints a login URL the first time: open it to add the device to your tailnet. Or set
+   [`musubi.tailnet.auth-key-file`](../reference/configuration.md#this-machines) first, to
+   use an auth key instead. It prints what other machines run once it is on the tailnet, after
+   saying that they can use ssh too, here for a hub on `devbox`:
+
+   ```text
+   Created a new hub in /home/you/.local/share/musubi/hub
+   Other machines reach this hub over the tailnet, with the commands it prints once it is on it, or over ssh, with --hub devbox, or the name they ssh to this machine by.
+   On this machine, leave out --hub.
+   Over the tailnet:
+   To share a repository:               musubi create --hub tailnet:nExample1CNTRL@100.64.0.1
+   To add another machine's copy of it: musubi join --hub tailnet:nExample1CNTRL@100.64.0.1
+   To make a new copy of a hive:        musubi clone <name> [<dir>] --hub tailnet:nExample1CNTRL@100.64.0.1
+   ```
+
+   On the tailnet's side, in its admin console:
+
+   - Let only the machines that need it reach the hub's device on TCP port 7575, in the
+     access controls.
+   - Turn key expiry off for the hub's device. The hub refuses a device whose key has
+     expired, and its own device, once expired, needs a new login, whose URL goes only to the
+     hub's output or log.
+   - For auth keys, don't make them ephemeral: an ephemeral device is deleted when it goes
+     offline, and comes back with a new ID, so the hub gets a new address and every machine
+     must join again. Make a key reusable to add several devices with it, and pre-approved
+     if the tailnet requires device approval.
+
+2. On each other machine, join with that address. The first time, the daemon's device may
+   ask for a login too, at a URL `musubi join` prints. The hub then refuses, giving this
+   machine's ID:
+
+   ```text
+   Error: the hub refused this machine's tailnet node, nExample2CNTRL
+   Hint: Add nExample2CNTRL to `musubi.tailnet.allow` on the hub's machine, then run this again.
+   ```
+
+3. On the hub's machine, add the ID. `jj config set` sets the whole list, so give every ID
+   the hub should admit, or edit the list with `jj config edit --user`:
+
+   ```sh
+   jj config set --user musubi.tailnet.allow '["nExample2CNTRL", "nExample3CNTRL"]'
+   ```
+
+   The hub picks the change up within seconds, without a restart, and so does taking an ID
+   out, which ends that machine's connections.
+
+4. Run the join again.
+
+Over a tailnet, this machine's daemon reaches the hub for every command: commands other than
+`create`, `join` and `clone`, which start it, fail while it is stopped. The hub's address
+names its device's ID, so whoever takes its IP address later isn't taken for it. Its keys are
+in the [state directory](../reference/configuration.md#on-every-machine): keep them, or
+every machine has to join at a new address.
 
 ## Start the hub
 

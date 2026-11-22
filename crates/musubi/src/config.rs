@@ -250,7 +250,7 @@ pub(crate) fn auto_snapshot(settings: &jj_lib::settings::UserSettings) -> anyhow
 
 /// A hub's directory written from the home directory, as `~/musubi-hub`, made absolute. An
 /// ssh destination never starts so.
-fn expand_home(hub: &str) -> String {
+pub(crate) fn expand_home(hub: &str) -> String {
     match (hub.strip_prefix("~/"), etcetera::home_dir()) {
         (Some(rest), Ok(home)) => home.join(rest).display().to_string(),
         _ => hub.to_owned(),
