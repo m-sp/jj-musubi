@@ -120,8 +120,9 @@ fn socket_for(dir: &Path) -> anyhow::Result<Socket> {
 }
 
 /// What to run to share a repository through the hub serving `dir`, on other machines and
-/// on this one.
-fn instructions(settings: &HubSettings, dir: &Path) -> anyhow::Result<String> {
+/// on this one. Over a `tailnet`, the hub prints the commands once it is on it, and ssh is
+/// the alternative.
+fn instructions(settings: &HubSettings, dir: &Path, tailnet: bool) -> anyhow::Result<String> {
     // What other machines pass as --hub: the name they ssh to this machine by.
     let public = match &settings.advertise {
         Some(host) => host.clone(),
@@ -138,13 +139,21 @@ fn instructions(settings: &HubSettings, dir: &Path) -> anyhow::Result<String> {
                     && fs::canonicalize(&hub)
                         .is_ok_and(|hub| fs::canonicalize(dir).is_ok_and(|dir| dir == hub)))
         });
-    let mut text = format!(
-        "To share a repository:               musubi create --hub {public}\n\
-         To add another machine's copy of it: musubi join --hub {public}\n\
-         To make a new copy of a hive:        musubi clone <name> [<dir>] --hub {public}\n\
-         Other machines reach this hub over ssh: use the name they ssh to this machine by, if \
-         it isn't {public}.\n"
-    );
+    let mut text = if tailnet {
+        format!(
+            "Other machines reach this hub over the tailnet, with the commands it prints once \
+             it is on it, or over ssh, with --hub {public}, or the name they ssh to this \
+             machine by.\n"
+        )
+    } else {
+        format!(
+            "To share a repository:               musubi create --hub {public}\n\
+             To add another machine's copy of it: musubi join --hub {public}\n\
+             To make a new copy of a hive:        musubi clone <name> [<dir>] --hub {public}\n\
+             Other machines reach this hub over ssh: use the name they ssh to this machine by, if \
+             it isn't {public}.\n"
+        )
+    };
     if default_here {
         text.push_str("On this machine, leave out --hub.\n");
     } else {
@@ -218,7 +227,7 @@ pub fn serve(ui: &Ui, args: ServeArgs) -> anyhow::Result<()> {
     // Whoever reads stdout may have stopped already; the hub serves all the same.
     writeln!(ui.stdout(), "{greeting}").ok();
     config::UserState::save_default_hub(&dir.display().to_string())?;
-    let instructions = instructions(&settings, &dir)?;
+    let instructions = instructions(&settings, &dir, default && crate::tailnet::listens())?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -244,6 +253,7 @@ pub fn serve(ui: &Ui, args: ServeArgs) -> anyhow::Result<()> {
             result = server.run(Arc::new(network.connect()), ready) => result,
             () = accepting => Ok(()),
             () = interrupted() => Ok(()),
+            () = crate::tailnet::host(ui, Arc::new(network.connect()), default) => Ok(()),
         }
     });
     if let Socket::Path(path) = &socket {
@@ -257,6 +267,8 @@ pub fn serve(ui: &Ui, args: ServeArgs) -> anyhow::Result<()> {
 pub fn install(ui: &Ui, args: ServeArgs, at_boot: bool) -> anyhow::Result<()> {
     anyhow::ensure!(!cfg!(windows), "musubi can't run a hub at login on Windows");
     login::prepare_hub_install(at_boot)?;
+    // Only the hub served without --dir is on the tailnet.
+    let tailnet = args.dir.is_none() && crate::tailnet::listens();
     let (dir, _) = choose_dir(args.dir)?;
     fs::create_dir_all(&dir).with_context(|| format!("creating {dir:?}"))?;
     // The path the hub, run there, finds its directory by, symbolic links resolved, which it
@@ -351,7 +363,7 @@ pub fn install(ui: &Ui, args: ServeArgs, at_boot: bool) -> anyhow::Result<()> {
         "The hub serves {}, and runs {when} from now on, through {described}.",
         dir.display()
     )?;
-    out.write_all(instructions(&settings, &dir)?.as_bytes())?;
+    out.write_all(instructions(&settings, &dir, tailnet)?.as_bytes())?;
     if cfg!(target_os = "linux") && !at_boot {
         writeln!(
             ui.hint(),
@@ -408,6 +420,11 @@ pub struct Connection {
 enum Place {
     /// The directory of a hub on this machine.
     Local(PathBuf),
+    /// A hub on a tailnet, and what keeps it from being reached.
+    Tailnet {
+        hub: String,
+        health: crate::tailnet::Health,
+    },
     /// An ssh destination, and what ssh says of it.
     Ssh { hub: String, health: ssh::Health },
 }
@@ -419,6 +436,9 @@ impl Connection {
     pub async fn out_of_reach(&self) -> Option<String> {
         match &self.place {
             Place::Local(dir) => open_local(dir).await.err().map(|err| format!("{err:#}")),
+            Place::Tailnet { hub, health } => {
+                health.problem().map(|problem| out_of_reach(hub, &problem))
+            }
             Place::Ssh { hub, health } => {
                 health.problem().map(|problem| out_of_reach(hub, &problem))
             }
@@ -430,6 +450,7 @@ impl Connection {
     pub async fn explain(&self, err: anyhow::Error) -> anyhow::Error {
         let problem = match &self.place {
             Place::Local(_) => None,
+            Place::Tailnet { health, .. } => health.problem(),
             Place::Ssh { health, .. } => health.problem_once_known().await,
         };
         match problem {
@@ -548,6 +569,30 @@ pub async fn connect_with(
         return Ok(Connection {
             transport: Arc::new(transport),
             place: Place::Local(dir),
+        });
+    }
+    if let Some(address) = crate::tailnet::Address::parse(hub) {
+        // Nothing to wait for if no daemon reaches tailnet hubs.
+        crate::tailnet::check().await?;
+        let link = crate::tailnet::Link::new(address?);
+        let health = link.health();
+        let connecting = StreamTransport::connect_with(Arc::new(link), while_disconnected);
+        // Why, as the link says it, rather than as the transport does.
+        let transport = match tokio::time::timeout(limit, connecting).await {
+            Ok(Ok(transport)) => transport,
+            Ok(Err(err)) => {
+                return Err(health
+                    .problem()
+                    .map_or_else(|| err.into(), |why| unreachable(Some(why))));
+            }
+            Err(_) => return Err(unreachable(health.problem())),
+        };
+        return Ok(Connection {
+            transport: Arc::new(transport),
+            place: Place::Tailnet {
+                hub: hub.to_owned(),
+                health,
+            },
         });
     }
     let link = ssh::Link::new(hub)?;

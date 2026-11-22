@@ -15,6 +15,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+pub mod heartbeat;
 mod memory;
 pub mod stream;
 

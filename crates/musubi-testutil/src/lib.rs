@@ -341,6 +341,12 @@ pub fn tempdir() -> TempDir {
     let keep = std::env::var_os("MUSUBI_KEEP_TEST_DIRS").is_some();
     let mut builder = tempfile::Builder::new();
     builder.prefix("musubi-test-");
+    // Private whatever the umask, which a test may change for the whole process while others
+    // make directories: one whose group can write to it holds no socket.
+    #[cfg(unix)]
+    let private = <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700);
+    #[cfg(unix)]
+    builder.permissions(private);
     let mut root = match in_memory() {
         Some(dir) if !keep => builder
             .tempdir_in(dir)

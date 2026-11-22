@@ -705,6 +705,9 @@ each decoder of what a peer sends, and each checks more than that nothing panics
   since a frame has only one encoding.
 - `greeting`: what the hub's machine prints before the hub greets. The greeting is found only
   at the end of a line, within the noise allowed before it.
+- `heartbeat`: what a tailnet hub, or a machine reaching one, sends: its answer, then frames.
+  An answer has one encoding, and frames deliver what reading them whole gives, ending the
+  same way.
 - `envelope`: messages of each kind, most behind this release's versions, which the fuzzer
   would otherwise have to find first. A message that decodes re-encodes to one that decodes
   the same, and that encoding with a byte after it is refused. (postcard accepts varints

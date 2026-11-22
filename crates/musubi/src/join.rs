@@ -202,6 +202,7 @@ pub fn join(
         machine: machine.key().to_owned(),
     };
     drop(node);
+    crate::tailnet::start_daemon(&hub, socket)?;
     let joined = match block_on(ask_preparing(ui, &hub, HubWideRequest::Join(request)))? {
         HubWideReply::Joined(joined) => joined,
         other => anyhow::bail!("unexpected reply from the hub: {other:?}"),
@@ -401,13 +402,16 @@ fn fetch_join_conflicts(ui: &Ui, located: &Located, socket: &Socket) -> anyhow::
 fn exact_pattern(name: &str) -> String {
     format!("exact:{}", RefName::new(name).as_symbol())
 }
-/// Asks `hub`, over ssh first making sure this machine's key works there.
+/// Asks `hub`, first making sure this machine can reach it: over ssh, that its key works
+/// there, or over a tailnet, that the hub admits it.
 async fn ask_preparing(
     ui: &Ui,
     hub: &str,
     request: HubWideRequest,
 ) -> anyhow::Result<HubWideReply> {
-    if !hub::is_local(hub) {
+    if let Some(address) = crate::tailnet::Address::parse(hub) {
+        crate::tailnet::prepare(ui, &address?).await?;
+    } else if !hub::is_local(hub) {
         ssh::prepare(ui, hub).await?;
     }
     hub::ask(hub, request).await
@@ -914,6 +918,7 @@ pub fn clone(
     }
     configured_machine_name(machine)?;
     let hub = UserState::hub(hub)?;
+    crate::tailnet::start_daemon(&hub, socket)?;
     configured_forget_after(&settings::user_config()?)?;
     let reply = block_on(ask_preparing(
         ui,

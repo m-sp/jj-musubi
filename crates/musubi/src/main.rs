@@ -25,6 +25,7 @@ mod socket;
 mod ssh;
 mod status;
 mod sync;
+mod tailnet;
 mod top;
 mod ui;
 mod upgrade;
@@ -42,6 +43,8 @@ use clap::CommandFactory as _;
 use clap::Parser as _;
 use jj_cli::ui::ColorChoice;
 use musubi_hub::hub_dir::JoinChoice;
+use tracing_subscriber::layer::SubscriberExt as _;
+use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::cli::Cli;
 use crate::cli::Command;
@@ -211,6 +214,8 @@ fn run(cli: Cli, ui: &Ui) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         // A log file never has colour.
         .with_ansi(ui.color() && std::io::stderr().is_terminal())
+        .finish()
+        .with(tailnet::without_secrets())
         .init();
     let role = Role::of(cli.command.as_ref());
     if role.has_users_agent()
