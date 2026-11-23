@@ -125,10 +125,10 @@ fn a_node_is_identified_only_without_doubt() {
 
     assert_eq!(named(one, None), Err(Unidentified::Unknown));
     // The source filter takes packets from whom the routes name, not whose the address is.
-    assert_eq!(named(&[], Some(&good)), Err(Unidentified::Ambiguous));
+    assert_eq!(named(&[], Some(&good)), Err(Unidentified::NoRoute));
     assert_eq!(
         named(&[node(OTHER)], Some(&good)),
-        Err(Unidentified::Ambiguous)
+        Err(Unidentified::RoutedElsewhere)
     );
     assert_eq!(
         named(&[good.clone(), node(OTHER)], Some(&good)),
