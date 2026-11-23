@@ -74,6 +74,12 @@ pub trait Tailnet: Send + Sync + 'static {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Unidentified {
     Unknown,
+    /// No node has a route to the address: its node is offline, or its routes aren't known
+    /// yet.
+    NoRoute,
+    /// One node has the most specific route to the address, and it isn't the node whose
+    /// address it is.
+    RoutedElsewhere,
     /// Another node's route covers the address as closely.
     Ambiguous,
     Expired,
@@ -86,6 +92,13 @@ impl fmt::Display for Unidentified {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unknown => f.write_str("no node this machine may reach has that address"),
+            Self::NoRoute => f.write_str(
+                "no node has a route to that address: its node is offline, or its routes \
+                 aren't known yet",
+            ),
+            Self::RoutedElsewhere => {
+                f.write_str("another node's route covers that address, not its own node's")
+            }
             Self::Ambiguous => f.write_str("more than one node has a route to that address"),
             Self::Expired => f.write_str("that node's key has expired"),
             Self::Unroutable => f.write_str("that node has no relay to reach it through yet"),
@@ -99,11 +112,13 @@ impl fmt::Display for Unidentified {
 /// and those it is `routed` to. Whatever is in doubt is refused.
 fn identify(owner: Option<&Peer>, routed: &[Peer], now: i64) -> Result<NodeId, Unidentified> {
     let owner = owner.ok_or(Unidentified::Unknown)?;
-    let [only] = routed else {
-        return Err(Unidentified::Ambiguous);
+    let only = match routed {
+        [] => return Err(Unidentified::NoRoute),
+        [only] => only,
+        _ => return Err(Unidentified::Ambiguous),
     };
     if only.id != owner.id {
-        return Err(Unidentified::Ambiguous);
+        return Err(Unidentified::RoutedElsewhere);
     }
     if owner.key_expires.is_some_and(|at| at > 0 && at <= now) {
         return Err(Unidentified::Expired);
