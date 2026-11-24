@@ -78,8 +78,8 @@ pub enum Unidentified {
     /// One node has the most specific route to the address, and it isn't the node whose
     /// address it is.
     RoutedElsewhere,
-    /// Another node's route covers the address as closely.
-    Ambiguous,
+    /// More than one node's route covers the address as closely: their IDs, sorted.
+    Ambiguous(Vec<String>),
     Expired,
     Unroutable,
     BadId,
@@ -97,7 +97,11 @@ impl fmt::Display for Unidentified {
             Self::RoutedElsewhere => {
                 f.write_str("another node's route covers that address, not its own node's")
             }
-            Self::Ambiguous => f.write_str("more than one node has a route to that address"),
+            Self::Ambiguous(nodes) => write!(
+                f,
+                "more than one node has a route to that address: {}",
+                nodes.join(", ")
+            ),
             Self::Expired => f.write_str("that node's key has expired"),
             Self::Unroutable => f.write_str("that node has no relay to reach it through yet"),
             Self::BadId => f.write_str("that node's ID can't be read"),
@@ -110,12 +114,22 @@ impl fmt::Display for Unidentified {
 /// and those it is `routed` to. Whatever is in doubt is refused.
 fn identify(owner: Option<&Peer>, routed: &[Peer], now: i64) -> Result<NodeId, Unidentified> {
     let owner = owner.ok_or(Unidentified::Unknown)?;
-    let only = match routed {
+    // A node listed more than once is one node. tailscale-rs 0.7.1 lists a peer once more for
+    // each of its routes on every change to it that control sends (`PeerDb::patch` takes the
+    // peer out before `upsert`, which then adds its routes again); every copy has its stable
+    // ID. Recheck this on upgrading tailscale-rs.
+    let mut nodes: Vec<&str> = routed.iter().map(|peer| peer.id.as_str()).collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let only = match nodes[..] {
         [] => return Err(Unidentified::NoRoute),
         [only] => only,
-        _ => return Err(Unidentified::Ambiguous),
+        _ => {
+            let nodes = nodes.into_iter().map(str::to_owned).collect();
+            return Err(Unidentified::Ambiguous(nodes));
+        }
     };
-    if only.id != owner.id {
+    if only != owner.id {
         return Err(Unidentified::RoutedElsewhere);
     }
     if owner.key_expires.is_some_and(|at| at > 0 && at <= now) {

@@ -130,9 +130,23 @@ fn a_node_is_identified_only_without_doubt() {
         named(&[node(OTHER)], Some(&good)),
         Err(Unidentified::RoutedElsewhere)
     );
+    let ambiguous = named(&[node(OTHER), good.clone(), node(OTHER)], Some(&good));
     assert_eq!(
-        named(&[good.clone(), node(OTHER)], Some(&good)),
-        Err(Unidentified::Ambiguous)
+        ambiguous,
+        Err(Unidentified::Ambiguous(vec![LAPTOP.into(), OTHER.into()]))
+    );
+    assert_eq!(
+        ambiguous.unwrap_err().to_string(),
+        format!("more than one node has a route to that address: {LAPTOP}, {OTHER}")
+    );
+    // A node listed twice for its route is still one node, whether its address's or not.
+    assert_eq!(
+        named(&[good.clone(), good.clone()], Some(&good)),
+        Ok(id(LAPTOP))
+    );
+    assert_eq!(
+        named(&[node(OTHER), node(OTHER)], Some(&good)),
+        Err(Unidentified::RoutedElsewhere)
     );
     assert_eq!(named(one, Some(&expired)), Err(Unidentified::Expired));
     assert_eq!(named(one, Some(&unrelayed)), Err(Unidentified::Unroutable));
