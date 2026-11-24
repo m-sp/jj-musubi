@@ -84,9 +84,10 @@ A hub whose address starts with `tailnet:` is reached through this machine's dae
 commands fail while it is stopped: run `musubi daemon start`. Then:
 
 - `the hub refused this machine's tailnet node`: add the ID it names to
-  `musubi.tailnet.allow` on the hub's machine. If it is listed already, the hub's log says
-  why it turned the connection away, after `turned away a tailnet connection from` and this
-  machine's address: the list may have an entry that isn't a device ID, such as a name,
+  `musubi.tailnet.allow` on the hub's machine. If it is listed already, or should be admitted
+  by a tag, the hub's log says why it turned the connection away, after `turned away a
+  tailnet connection from` and this machine's address, and for a tag, which tags the device
+  has: the list may have an entry that is neither a device ID nor a tag, such as a name,
   which makes the hub admit nobody until it is fixed.
 - `the hub couldn't tell which tailnet node this machine is`: try again in a minute, as the
   hub may not have caught up with the tailnet yet, as when either device has only just

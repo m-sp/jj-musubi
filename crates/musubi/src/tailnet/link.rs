@@ -296,8 +296,8 @@ impl Connector for Link {
 /// That the hub doesn't admit this machine's node, `own`, and what to do about it.
 fn not_allowed(own: &str) -> String {
     format!(
-        "the hub refused this machine's tailnet node, {own}; add it to musubi.tailnet.allow on \
-         the hub's machine"
+        "the hub refused this machine's tailnet node, {own}; add it, or a tag it has, to \
+         musubi.tailnet.allow on the hub's machine"
     )
 }
 
@@ -324,8 +324,8 @@ pub async fn prepare(ui: &Ui, hub: &Address) -> anyhow::Result<()> {
                 return Err(crate::ui::with_hint(
                     anyhow::anyhow!("the hub refused this machine's tailnet node, {text}"),
                     format!(
-                        "Add {text} to `musubi.tailnet.allow` on the hub's machine, then run \
-                         this again."
+                        "Add {text}, or a tag it has, to `musubi.tailnet.allow` on the hub's \
+                         machine, then run this again."
                     ),
                 ));
             }
@@ -473,8 +473,8 @@ mod bridge_tests {
     fn a_refused_machine_is_told_what_to_add_where() {
         assert_eq!(
             not_allowed("nExample2CNTRL"),
-            "the hub refused this machine's tailnet node, nExample2CNTRL; add it to \
-             musubi.tailnet.allow on the hub's machine"
+            "the hub refused this machine's tailnet node, nExample2CNTRL; add it, or a tag it \
+             has, to musubi.tailnet.allow on the hub's machine"
         );
     }
 

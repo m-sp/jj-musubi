@@ -27,6 +27,7 @@ fn node(id: &str) -> Peer {
         id: id.to_owned(),
         key_expires: None,
         relayed: true,
+        tags: Vec::new(),
     }
 }
 
@@ -617,4 +618,50 @@ async fn setting_a_list_ends_the_connections_it_did_not_check() {
     listing.send_replace(Some(Allowed::parse(&[LAPTOP.to_owned()]).unwrap()));
     assert_eq!(serving.await.unwrap(), Served::Revoked);
     assert_eq!(set.elapsed(), Duration::ZERO);
+}
+
+/// A tag on the list admits a node that has it, though the list doesn't name the node, for as
+/// long as it has it: taking the tag from the node ends its connection as taking the node off
+/// the list does, and it is refused after, told which tags it has.
+#[tokio::test(start_paused = true)]
+async fn a_tag_admits_a_node_for_as_long_as_it_has_it() {
+    let (net, _accepting) = Fake::new(false);
+    let tagged = |tags: &[&str]| Peer {
+        tags: tags.iter().map(|&tag| tag.to_owned()).collect(),
+        ..node(LAPTOP)
+    };
+    net.set(LAPTOP_IP, Some(tagged(&["tag:ci", "tag:sandbox"])));
+    let allowed = allowing(&[OTHER, "tag:sandbox"]);
+    let (serving, _beating, _hub) = served_laptop(&net, allowed.clone()).await;
+    tokio::time::sleep(RECHECK * 3).await;
+    assert!(!serving.is_finished());
+
+    let untagged = tokio::time::Instant::now();
+    net.set(LAPTOP_IP, Some(tagged(&["tag:ci"])));
+    assert_eq!(serving.await.unwrap(), Served::Revoked);
+    assert!(untagged.elapsed() <= RECHECK);
+
+    let (stream, mut laptop) = tokio::io::duplex(1024);
+    let serving = serve_peer(
+        net.as_ref(),
+        &allowed,
+        stream,
+        IpAddr::V4(LAPTOP_IP),
+        async || -> io::Result<DuplexStream> { panic!("the hub was connected to") },
+        || panic!("it was admitted"),
+    );
+    let refused = async {
+        let answer = Answer::read(&mut laptop).await.unwrap();
+        drop(laptop);
+        answer
+    };
+    let (served, answer) = tokio::join!(serving, refused);
+    assert_eq!(answer, Answer::NotAllowed);
+    let Served::Refused { why, .. } = served else {
+        panic!("{served:?}");
+    };
+    assert_eq!(
+        why,
+        format!("musubi.tailnet.allow lists neither {LAPTOP} nor its tags, tag:ci")
+    );
 }

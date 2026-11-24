@@ -216,6 +216,7 @@ fn peer(node: &tailscale::NodeInfo) -> Peer {
         id: node.stable_id.0.clone(),
         key_expires: node.node_key_expiry.map(|at| at.timestamp()),
         relayed: node.derp_region.is_some(),
+        tags: node.tags.clone(),
     }
 }
 

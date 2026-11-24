@@ -146,7 +146,7 @@ which says its ID:
 
 ```text
 Error: the hub refused this machine's tailnet node, nExample2CNTRL
-Hint: Add nExample2CNTRL to `musubi.tailnet.allow` on the hub's machine, then run this again.
+Hint: Add nExample2CNTRL, or a tag it has, to `musubi.tailnet.allow` on the hub's machine, then run this again.
 ```
 
 A machine the list does name can still be told `the hub couldn't tell which tailnet node this
@@ -163,6 +163,23 @@ jj config set --user musubi.tailnet.allow '["nExample2CNTRL", "nExample3CNTRL"]'
 The hub picks the change up within seconds, without a restart. Taking an ID out ends that
 machine's connections, and setting the list ends those it didn't check, whose machines
 connect again to be checked.
+
+To admit machines that come and go, such as ephemeral VMs, each a new device with a new ID
+every time it starts, list a tag instead of IDs. A tag admits every device the tailnet gives
+it, for as long as it has it:
+
+```sh
+jj config set --user musubi.tailnet.allow '["nExample2CNTRL", "tag:sandbox"]'
+```
+
+The tailnet's access controls say who may give a device the tag (`tagOwners`), and an auth
+key can carry it: a device added with a key tagged `tag:sandbox` joins without a step on the
+hub's machine. So whoever holds such a key can use the hub, as anyone with an admitted
+machine's keys can: keep it as you would those, and make it ephemeral, so that the devices it
+adds are deleted once they go offline. A tagged device belongs to no one, so a rule that
+names your login doesn't let it through the access controls: name the tag in the rule too,
+as in `"src": ["you@example.com", "tag:sandbox"]`. Taking the tag from a device, or out of
+the list, ends its connections within seconds.
 
 Over a tailnet, this machine's daemon reaches the hub for every command: commands other than
 `create`, `join` and `clone`, which start it, fail while it is stopped. The hub's address

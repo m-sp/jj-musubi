@@ -173,8 +173,8 @@ pub fn listens() -> bool {
 }
 
 /// What `musubi.tailnet.allow` as read admits, of what the tailnet's access controls let
-/// through: everything if it is unset, and nobody unless every entry is a node ID; and, if it
-/// admits nobody for that, why.
+/// through: everything if it is unset, and nobody unless every entry is a node ID or a tag;
+/// and, if it admits nobody for that, why.
 fn admitting(read: Allow) -> (Option<Allowed>, Option<String>) {
     match read {
         Allow::Unset => (None, None),
@@ -500,7 +500,7 @@ mod tests {
             Allow::Unknown("jj's config can't be read".to_owned()),
         ] {
             let (allowed, why) = admitting(read);
-            assert!(!allowed.unwrap().admits(&node));
+            assert!(!allowed.unwrap().admits(&node, &[]));
             assert!(why.is_some());
         }
     }

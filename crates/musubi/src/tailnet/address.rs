@@ -1,4 +1,4 @@
-//! Node IDs, and a hub's address on a tailnet, `tailnet:<node ID>@<IPv4 address>`.
+//! Node IDs and tags, and a hub's address on a tailnet, `tailnet:<node ID>@<IPv4 address>`.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -22,15 +22,45 @@ impl fmt::Display for NodeId {
 impl FromStr for NodeId {
     type Err = anyhow::Error;
 
-    /// Refuses what can't be one, as a name with a `-` or a `.`, an address or a tag, so
-    /// that a hub's address with one is refused, and a list with one admits nobody.
+    /// Refuses what can't be one, as a name with a `-` or a `.`, or an address, so that a
+    /// hub's address with one is refused, and a list with one admits nobody.
     fn from_str(id: &str) -> anyhow::Result<Self> {
         anyhow::ensure!(
             id.len() > 1 && id.starts_with('n') && id.bytes().all(|b| b.is_ascii_alphanumeric()),
-            "{id:?} isn't a tailnet node ID, like nExample1CNTRL; names, addresses and tags \
-             can't be used"
+            "{id:?} isn't a tailnet node ID, like nExample1CNTRL; names and addresses can't \
+             be used"
         );
         Ok(Self(id.to_owned()))
+    }
+}
+
+/// What a tag starts with.
+const TAG: &str = "tag:";
+
+/// A tag the tailnet's control server gives a node, `tag:<name>`. No node chooses its own:
+/// the tailnet policy's `tagOwners` say who may give one, as with an auth key that carries
+/// it. A tag stands for every node it is given, so admitting one admits nodes not yet made,
+/// as ephemeral ones are each time they start.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Tag(String);
+
+impl fmt::Display for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for Tag {
+    type Err = anyhow::Error;
+
+    /// Takes only what Tailscale does: letters, digits and dashes after `tag:`.
+    fn from_str(tag: &str) -> anyhow::Result<Self> {
+        let name = tag.strip_prefix(TAG).unwrap_or_default();
+        anyhow::ensure!(
+            !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+            "{tag:?} isn't a tailnet tag, like tag:musubi"
+        );
+        Ok(Self(tag.to_owned()))
     }
 }
 
@@ -68,24 +98,32 @@ impl fmt::Display for Address {
     }
 }
 
-/// The nodes that may use a hub: none, unless listed.
+/// The nodes that may use a hub: none, unless listed, by node ID or by a tag they have.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Allowed(BTreeSet<NodeId>);
+pub struct Allowed {
+    nodes: BTreeSet<NodeId>,
+    tags: BTreeSet<Tag>,
+}
 
 impl Allowed {
-    /// The nodes `musubi.tailnet.allow` lists. One entry that isn't a node ID fails it all,
-    /// rather than being passed over.
+    /// The nodes and tags `musubi.tailnet.allow` lists. One entry that is neither a node ID
+    /// nor a tag fails it all, rather than being passed over.
     pub fn parse(entries: &[String]) -> anyhow::Result<Self> {
-        entries
-            .iter()
-            .map(|entry| entry.parse())
-            .collect::<anyhow::Result<_>>()
-            .map(Self)
-            .map_err(|err: anyhow::Error| err.context("bad entry in musubi.tailnet.allow"))
+        let mut allowed = Self::default();
+        for entry in entries {
+            let added = if entry.starts_with(TAG) {
+                entry.parse().map(|tag| allowed.tags.insert(tag))
+            } else {
+                entry.parse().map(|node| allowed.nodes.insert(node))
+            };
+            added.map_err(|err| err.context("bad entry in musubi.tailnet.allow"))?;
+        }
+        Ok(allowed)
     }
 
-    pub fn admits(&self, node: &NodeId) -> bool {
-        self.0.contains(node)
+    /// Whether `node`, which has `tags`, may use the hub.
+    pub fn admits(&self, node: &NodeId, tags: &[Tag]) -> bool {
+        self.nodes.contains(node) || tags.iter().any(|tag| self.tags.contains(tag))
     }
 }
 
@@ -119,22 +157,39 @@ mod tests {
     }
 
     #[test]
-    fn only_node_ids_can_be_allowed() {
+    fn only_node_ids_and_tags_can_be_allowed() {
         for entry in [
             "",
             "n",
             "*",
             "laptop",
             "nas.example.ts.net",
-            "tag:musubi",
             "100.64.0.2",
             "nExample1CNTRL ",
+            "tag:",
+            "tag:*",
+            "tag:a b",
+            "tag:sandbox.example",
+            "Tag:musubi",
+            "musubi",
         ] {
             assert!(Allowed::parse(&[entry.to_owned()]).is_err(), "{entry:?}");
         }
+        let node = |id: &str| id.parse::<NodeId>().unwrap();
+        let tags =
+            |tags: &[&str]| -> Vec<Tag> { tags.iter().map(|t| t.parse().unwrap()).collect() };
+
         let allowed = Allowed::parse(&["nExample1CNTRL".to_owned()]).unwrap();
-        assert!(allowed.admits(&"nExample1CNTRL".parse().unwrap()));
-        assert!(!allowed.admits(&"nExample2CNTRL".parse().unwrap()));
-        assert!(!Allowed::default().admits(&"nExample1CNTRL".parse().unwrap()));
+        assert!(allowed.admits(&node("nExample1CNTRL"), &[]));
+        assert!(!allowed.admits(&node("nExample2CNTRL"), &[]));
+        assert!(!allowed.admits(&node("nExample2CNTRL"), &tags(&["tag:musubi"])));
+        assert!(!Allowed::default().admits(&node("nExample1CNTRL"), &tags(&["tag:musubi"])));
+
+        // A tag admits whichever node has it, and only it.
+        let allowed =
+            Allowed::parse(&["nExample1CNTRL".to_owned(), "tag:sandbox-1".to_owned()]).unwrap();
+        assert!(allowed.admits(&node("nExample2CNTRL"), &tags(&["tag:ci", "tag:sandbox-1"])));
+        assert!(!allowed.admits(&node("nExample2CNTRL"), &tags(&["tag:sandbox"])));
+        assert!(allowed.admits(&node("nExample1CNTRL"), &[]));
     }
 }

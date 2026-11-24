@@ -21,5 +21,9 @@ compromised machine, remove its device in the tailnet's admin console, or change
 controls so that it no longer reaches the hub's. The hub's device enforces them on every
 packet it receives, so a change applies once the tailnet sends it there. `musubi.tailnet.allow`
 narrows that further, to the device IDs it lists, which the hub rereads every few seconds:
-taking an ID out ends that machine's connections within seconds. The tailnet link is carried
-by tailscale-rs, which runs inside jj-musubi and hasn't had an independent security audit.
+taking an ID out ends that machine's connections within seconds. The list can also name a
+tag, which admits every device the tailnet gives it: then whoever may give a device that tag,
+under the tailnet's `tagOwners`, or holds an auth key that carries it, can use the hub, if the
+access controls let the device through. Taking the tag out of the list, or from the device,
+ends its connections within seconds. The tailnet link is carried by tailscale-rs, which runs
+inside jj-musubi and hasn't had an independent security audit.

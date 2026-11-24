@@ -32,6 +32,7 @@ use tokio::sync::watch;
 use super::address::Address;
 use super::address::Allowed;
 use super::address::NodeId;
+use super::address::Tag;
 
 /// How often a connection's node is identified again, so that one removed from the tailnet,
 /// or whose address has passed to another, loses the connection.
@@ -54,6 +55,16 @@ pub struct Peer {
     /// Whether it has a home relay. tailscale-rs sends what is for one without, by the next
     /// broader route, to whatever node has that: an exit node, say.
     pub relayed: bool,
+    /// The tags the control server gives it, as `tag:<name>`.
+    pub tags: Vec<String>,
+}
+
+/// A node, as an address was identified to be: its ID, and the tags it has, which
+/// `musubi.tailnet.allow` may admit it by as well.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub node: NodeId,
+    pub tags: Vec<Tag>,
 }
 
 /// A tailnet node, as the gate uses one.
@@ -144,7 +155,8 @@ fn identify(owner: Option<&Peer>, routed: &[Peer], now: i64) -> Result<NodeId, U
     owner.id.parse().map_err(|_| Unidentified::BadId)
 }
 
-async fn who<N: Tailnet>(net: &N, ip: Ipv4Addr) -> Result<NodeId, Unidentified> {
+/// Which node `ip` is now, and its tags. A tag that can't be read is left out.
+async fn who<N: Tailnet>(net: &N, ip: Ipv4Addr) -> Result<Identity, Unidentified> {
     let lookup = |err: io::Error| Unidentified::Lookup(err.to_string());
     let owner = net.owner(ip).await.map_err(lookup)?;
     let routed = net.routed(ip).await.map_err(lookup)?;
@@ -153,7 +165,13 @@ async fn who<N: Tailnet>(net: &N, ip: Ipv4Addr) -> Result<NodeId, Unidentified> 
         .map_or(i64::MAX, |since| {
             i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
         });
-    identify(owner.as_ref(), &routed, now)
+    let node = identify(owner.as_ref(), &routed, now)?;
+    let tags = owner
+        .iter()
+        .flat_map(|owner| &owner.tags)
+        .filter_map(|tag| tag.parse().ok())
+        .collect();
+    Ok(Identity { node, tags })
 }
 
 /// How a connection to or from a hub went.
@@ -179,15 +197,17 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     L: AsyncRead + AsyncWrite + Unpin,
 {
-    carry_listed(net, ip, node, stream, local, None).await
+    carry_listed(net, ip, node, Vec::new(), stream, local, None).await
 }
 
 /// Carries `local` over `stream` for as long as `ip` is still `node`, and, on a hub, for as
-/// long as `allowed` admits it: a list that is unset now admits it too.
+/// long as `allowed` admits it, by its ID or by the tags it has (`tags`, to begin with): a
+/// list that is unset now admits it too.
 async fn carry_listed<N, S, L>(
     net: &N,
     ip: Ipv4Addr,
     node: &NodeId,
+    tags: Vec<Tag>,
     stream: S,
     local: L,
     allowed: Option<watch::Receiver<Option<Allowed>>>,
@@ -199,6 +219,15 @@ where
 {
     let changed = async {
         let mut allowed = allowed;
+        let mut tags = tags;
+        let admitted = |allowed: &Option<watch::Receiver<Option<Allowed>>>, tags: &[Tag]| {
+            allowed.as_ref().is_none_or(|allowed| {
+                allowed
+                    .borrow()
+                    .as_ref()
+                    .is_none_or(|listed| listed.admits(node, tags))
+            })
+        };
         // Since when looking the node up has failed, with no answer since.
         let mut failing = None;
         loop {
@@ -217,20 +246,27 @@ where
                 () = tokio::time::sleep(RECHECK) => {}
                 () = allow_changed => {}
             }
-            if let Some(allowed) = &allowed
-                && allowed
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|listed| !listed.admits(node))
-            {
+            if !admitted(&allowed, &tags) {
                 tracing::info!(
-                    "musubi.tailnet.allow no longer lists {node}; ending its connection"
+                    "musubi.tailnet.allow no longer admits {node}; ending its connection"
                 );
                 return;
             }
             match who(net, ip).await {
-                Ok(now) if now == *node => failing = None,
+                Ok(now) if now.node == *node => {
+                    failing = None;
+                    // A tag it was admitted by may have been taken from it.
+                    tags = now.tags;
+                    if !admitted(&allowed, &tags) {
+                        tracing::info!(
+                            "{node} no longer has a tag musubi.tailnet.allow lists; ending \
+                             its connection"
+                        );
+                        return;
+                    }
+                }
                 Ok(now) => {
+                    let now = now.node;
                     tracing::info!("{ip} is now {now}, not {node}; ending its connection");
                     return;
                 }
@@ -285,8 +321,8 @@ where
 
 /// Serves what connected to a hub's port from `from`. The tailnet's access controls, which the
 /// node enforces on every packet it receives, let it through. If `allowed` lists nodes,
-/// nothing of it reaches the hub, not even a connection, unless it is a node the list names.
-/// `admitted` hears of what is admitted.
+/// nothing of it reaches the hub, not even a connection, unless it is a node the list names,
+/// or that has a tag the list names. `admitted` hears of what is admitted.
 pub async fn serve_peer<N, S, L>(
     net: &N,
     allowed: &watch::Receiver<Option<Allowed>>,
@@ -308,10 +344,22 @@ where
             Err((Answer::Unidentified, format!("{from} is an IPv6 address")))
         }
         (Some(listed), IpAddr::V4(ip)) => match who(net, ip).await {
-            Ok(node) if listed.admits(&node) => Ok(Some((ip, node))),
-            Ok(node) => Err((
+            Ok(now) if listed.admits(&now.node, &now.tags) => Ok(Some((ip, now))),
+            Ok(now) if now.tags.is_empty() => Err((
                 Answer::NotAllowed,
-                format!("musubi.tailnet.allow doesn't list {node}"),
+                format!("musubi.tailnet.allow doesn't list {}", now.node),
+            )),
+            Ok(now) => Err((
+                Answer::NotAllowed,
+                format!(
+                    "musubi.tailnet.allow lists neither {} nor its tags, {}",
+                    now.node,
+                    now.tags
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             )),
             Err(why) => Err((Answer::Unidentified, why.to_string())),
         },
@@ -347,8 +395,8 @@ where
     }
     match identified {
         None => carry_unlisted(from, stream, local, allowed.clone()).await,
-        Some((ip, node)) => {
-            carry_listed(net, ip, &node, stream, local, Some(allowed.clone())).await
+        Some((ip, Identity { node, tags })) => {
+            carry_listed(net, ip, &node, tags, stream, local, Some(allowed.clone())).await
         }
     }
 }
@@ -484,10 +532,10 @@ impl<N: Tailnet> Dialer<N> {
 
     async fn check(&self, hub: &Address) -> Result<(), DialError> {
         match who(self.net.as_ref(), hub.ip).await {
-            Ok(found) if found == hub.node => Ok(()),
+            Ok(found) if found.node == hub.node => Ok(()),
             Ok(found) => Err(DialError::OtherNode {
                 hub: hub.clone(),
-                found,
+                found: found.node,
             }),
             Err(why) => Err(DialError::Unidentified {
                 hub: hub.clone(),

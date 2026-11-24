@@ -6,11 +6,11 @@
   tailscale-rs inside jj-musubi: no `tailscaled` and no ssh server. On the hub's machine,
   `musubi.tailnet.hub = true` puts the hub on the tailnet, admitting every device that the
   tailnet's access controls let reach it on TCP port 7575, which Tailscale's default policy
-  does for every device, or, if `musubi.tailnet.allow` is set, only the device IDs it
-  lists, which it rereads every few seconds; `musubi hub` prints the address other machines
-  join with, `--hub tailnet:<node ID>@<address>`. A machine reaches such a hub through its
-  daemon, so with the daemon stopped, commands other than `create`, `join` and `clone`, which
-  start it, fail, saying to run `musubi daemon start`. [Or connect over a
+  does for every device, or, if `musubi.tailnet.allow` is set, only the device IDs and tags
+  (`tag:sandbox`) it lists, which it rereads every few seconds; `musubi hub` prints the address
+  other machines join with, `--hub tailnet:<node ID>@<address>`. A machine reaches such a hub
+  through its daemon, so with the daemon stopped, commands other than `create`, `join` and
+  `clone`, which start it, fail, saying to run `musubi daemon start`. [Or connect over a
   tailnet](docs/guides/setup.md#or-connect-over-a-tailnet) sets it up. tailscale-rs is
   preview software, not yet audited. Hubs reached over ssh or on the same machine work as
   before. A hub address with `tailnet:` means nothing to an earlier release, which would
