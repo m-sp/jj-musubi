@@ -93,6 +93,9 @@ commands fail while it is stopped: run `musubi daemon start`. Then:
   this one reach the hub's on TCP port 7575.
 - `is now node ..., not the hub's node`: the address belongs to another device now. Join at
   the hub's new address, as `musubi hub` prints it.
+- `more than one node has a route to that address`, with their IDs: a device other than the
+  hub's, or this machine's, advertises a route that covers that address. In the tailnet's
+  admin console, stop that device advertising the route, or stop accepting it.
 
 The hub's own device may need logging in again, as after its key expired: no machine reaches
 the hub, and the hub's output or log says `To add this hub to the tailnet, log in at` and a
