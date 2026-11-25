@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use jj_lib::config::ConfigGetResultExt as _;
 
+use super::address::Allowed;
 use crate::config;
 
 /// The two nodes a machine may have: its daemon's, to reach hubs, and its hub's, which other
@@ -147,6 +148,38 @@ impl Switch {
     }
 }
 
+/// What `musubi.tailnet.allow` says: which of the nodes the tailnet's access controls let
+/// through the hub admits.
+#[derive(Debug)]
+pub enum Allow {
+    /// It isn't set: every node they let through.
+    Unset,
+    /// Whether it is set can't be told: jj's config couldn't be read.
+    Unknown(String),
+    /// It is set, to what it admits. An entry that isn't a node ID, or a value that isn't a
+    /// list of strings, admits nobody, and says why.
+    Set(Result<Allowed, String>),
+}
+
+impl Allow {
+    pub fn read() -> Self {
+        match crate::settings::user_config() {
+            Ok(config) => Self::of(&config),
+            Err(err) => Self::Unknown(format!("{err:#}")),
+        }
+    }
+
+    fn of(config: &jj_lib::config::StackedConfig) -> Self {
+        match config.get::<Vec<String>>("musubi.tailnet.allow").optional() {
+            Ok(None) => Self::Unset,
+            Ok(Some(entries)) => {
+                Self::Set(Allowed::parse(&entries).map_err(|err| format!("{err:#}")))
+            }
+            Err(err) => Self::Set(Err(format!("musubi.tailnet.allow: {err}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +217,31 @@ mod tests {
         assert!(matches!(
             config("musubi.tailnet.hub = 'yes'"),
             Switch::Unknown(_)
+        ));
+    }
+
+    #[test]
+    fn a_list_that_is_set_but_unreadable_admits_nobody() {
+        let config = |text: &str| {
+            let mut config = jj_lib::config::StackedConfig::empty();
+            config.add_layer(
+                jj_lib::config::ConfigLayer::parse(jj_lib::config::ConfigSource::User, text)
+                    .unwrap(),
+            );
+            Allow::of(&config)
+        };
+        assert!(matches!(config(""), Allow::Unset));
+        assert!(matches!(
+            config("musubi.tailnet.allow = []"),
+            Allow::Set(Ok(_))
+        ));
+        assert!(matches!(
+            config("musubi.tailnet.allow = 'nExample1CNTRL'"),
+            Allow::Set(Err(_))
+        ));
+        assert!(matches!(
+            config("musubi.tailnet.allow = ['laptop']"),
+            Allow::Set(Err(_))
         ));
     }
 }

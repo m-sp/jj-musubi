@@ -19,6 +19,7 @@ every device on the tailnet. A device stands for the keys in `tailnet/daemon/key
 its machine's state directory: whoever has them is that machine. To shut out a lost or
 compromised machine, remove its device in the tailnet's admin console, or change the access
 controls so that it no longer reaches the hub's. The hub's device enforces them on every
-packet it receives, so a change applies once the tailnet sends it there. The tailnet link is
-carried by tailscale-rs, which runs inside jj-musubi and hasn't had an independent security
-audit.
+packet it receives, so a change applies once the tailnet sends it there. `musubi.tailnet.allow`
+narrows that further, to the device IDs it lists, which the hub rereads every few seconds:
+taking an ID out ends that machine's connections within seconds. The tailnet link is carried
+by tailscale-rs, which runs inside jj-musubi and hasn't had an independent security audit.

@@ -59,10 +59,20 @@ pub enum Answer {
     Welcome = 0,
     /// No hub is running there.
     NoHub = 2,
+    /// The machine connecting may not use the hub.
+    NotAllowed = 1,
+    /// The side connected to couldn't tell which machine is connecting, so it can't tell
+    /// whether that machine may use the hub.
+    Unidentified = 3,
 }
 
 impl Answer {
-    const ALL: [Self; 2] = [Self::Welcome, Self::NoHub];
+    const ALL: [Self; 4] = [
+        Self::Welcome,
+        Self::NoHub,
+        Self::NotAllowed,
+        Self::Unidentified,
+    ];
 
     /// Sends this answer.
     pub async fn send(self, to: &mut (impl AsyncWrite + Unpin)) -> io::Result<()> {

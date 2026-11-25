@@ -165,7 +165,7 @@ fn node() -> watch::Receiver<Status> {
                     };
                     tracing::info!("this machine is tailnet node {}, at {}", node.id, node.ip);
                     let ready = Ready {
-                        dialer: Arc::new(Dialer::new(node.clone())),
+                        dialer: Arc::new(Dialer::new(node.clone(), node.id.clone())),
                         node: node.clone(),
                         runtime: tokio::runtime::Handle::current(),
                         usage: generation.usage,
@@ -251,6 +251,12 @@ async fn link(ready: Ready, hub: Address, mut stream: Stream, deadline: tokio::t
         Ok(Ok(link)) => link,
         Ok(Err(err)) => {
             let answer = match &err {
+                DialError::NotIdentified => {
+                    return reply(stream, Reply::Unidentified, &err.to_string()).await;
+                }
+                DialError::NotAllowed { own } => {
+                    return reply(stream, Reply::NotAllowed, &own.to_string()).await;
+                }
                 DialError::OtherNode { .. } => Reply::Refused,
                 DialError::NoAnswer { .. } => {
                     ready.usage.unanswered();

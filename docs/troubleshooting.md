@@ -83,6 +83,17 @@ For a hub that stops at logout or reboot, see
 A hub whose address starts with `tailnet:` is reached through this machine's daemon, so
 commands fail while it is stopped: run `musubi daemon start`. Then:
 
+- `the hub refused this machine's tailnet node`: add the ID it names to
+  `musubi.tailnet.allow` on the hub's machine. If it is listed already, the hub's log says
+  why it turned the connection away, after `turned away a tailnet connection from` and this
+  machine's address: the list may have an entry that isn't a device ID, such as a name,
+  which makes the hub admit nobody until it is fixed.
+- `the hub couldn't tell which tailnet node this machine is`: try again in a minute, as the
+  hub may not have caught up with the tailnet yet, as when either device has only just
+  connected. If it still says so, the log on the hub's machine says why, after `turned away
+  a tailnet connection from` and this machine's address. For `more than one node has a route
+  to that address`, see below. Otherwise, check in the tailnet's admin console that this
+  machine's device is connected and its key hasn't expired.
 - `waits for a login`: open the URL it gives, or set `musubi.tailnet.auth-key-file` and run
   `musubi daemon restart`.
 - `didn't answer over the tailnet`, or `no node this machine may reach has that address`:
@@ -92,8 +103,9 @@ commands fail while it is stopped: run `musubi daemon start`. Then:
 - `is now node ..., not the hub's node`: the address belongs to another device now. Join at
   the hub's new address, as `musubi hub` prints it.
 - `more than one node has a route to that address`, with their IDs: a device other than the
-  hub's advertises a route that covers that address. In the tailnet's admin console, stop
-  that device advertising the route, or stop accepting it.
+  hub's, or, in the hub's log, this machine's, advertises a route that covers that address.
+  In the tailnet's admin console, stop that device advertising the route, or stop accepting
+  it.
 
 The hub's own device may need logging in again, as after its key expired: no machine reaches
 the hub, and the hub's output or log says `To add this hub to the tailnet, log in at` and a

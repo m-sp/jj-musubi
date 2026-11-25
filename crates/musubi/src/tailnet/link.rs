@@ -51,10 +51,22 @@ pub enum Reply {
     Refused,
     /// The node waits for a login at the URL the text is.
     Login = 4,
+    /// The hub doesn't admit this machine's node, whose ID the text is.
+    NotAllowed = 3,
+    /// The hub couldn't tell which node this machine is, as the text says: it may tell later,
+    /// but asking it often only gets this machine turned away for longer.
+    Unidentified = 5,
 }
 
 impl Reply {
-    const ALL: [Self; 4] = [Self::Open, Self::Failed, Self::Refused, Self::Login];
+    const ALL: [Self; 6] = [
+        Self::Open,
+        Self::Failed,
+        Self::Refused,
+        Self::Login,
+        Self::NotAllowed,
+        Self::Unidentified,
+    ];
 }
 
 /// The socket the daemon listens on for links to tailnet hubs.
@@ -262,6 +274,10 @@ impl Connector for Link {
             }
             Reply::Failed => Err(failed(text, io::ErrorKind::Other)),
             Reply::Refused => Err(failed(text, io::ErrorKind::InvalidData)),
+            Reply::NotAllowed => Err(failed(not_allowed(&text), io::ErrorKind::InvalidData)),
+            // Tried again only as rarely as a reply of another build, as the hub caps its
+            // refusals of one address.
+            Reply::Unidentified => Err(failed(text, io::ErrorKind::InvalidData)),
             Reply::Login => Err(failed(
                 format!("this machine's tailnet node waits for a login at {text}"),
                 io::ErrorKind::Other,
@@ -275,6 +291,14 @@ impl Connector for Link {
             self.hub.ip
         )));
     }
+}
+
+/// That the hub doesn't admit this machine's node, `own`, and what to do about it.
+fn not_allowed(own: &str) -> String {
+    format!(
+        "the hub refused this machine's tailnet node, {own}; add it to musubi.tailnet.allow on \
+         the hub's machine"
+    )
 }
 
 /// Makes sure the hub at `hub` can be reached before a join asks it anything: logging this
@@ -296,6 +320,15 @@ pub async fn prepare(ui: &Ui, hub: &Address) -> anyhow::Result<()> {
         match reply {
             Reply::Open => return Ok(()),
             Reply::Refused => anyhow::bail!("{text}"),
+            Reply::NotAllowed => {
+                return Err(crate::ui::with_hint(
+                    anyhow::anyhow!("the hub refused this machine's tailnet node, {text}"),
+                    format!(
+                        "Add {text} to `musubi.tailnet.allow` on the hub's machine, then run \
+                         this again."
+                    ),
+                ));
+            }
             Reply::Login => {
                 if said.as_ref() != Some(&text) {
                     writeln!(
@@ -307,6 +340,9 @@ pub async fn prepare(ui: &Ui, hub: &Address) -> anyhow::Result<()> {
                 // However long logging in takes.
                 deadline = tokio::time::Instant::now() + PREPARE;
             }
+            // Not asked again: the hub turns an address it refuses often away unanswered, and
+            // each of those counts towards replacing its node.
+            Reply::Unidentified => anyhow::bail!("{text}"),
             Reply::Failed if tokio::time::Instant::now() >= deadline => {
                 anyhow::bail!("the hub at {hub} is out of reach: {text}");
             }
@@ -396,7 +432,9 @@ mod bridge_tests {
     #[tokio::test]
     async fn a_refusal_is_final_and_the_rest_is_tried_again() {
         for (reply, text, final_) in [
+            (Reply::NotAllowed, "nExample2CNTRL", true),
             (Reply::Refused, "that address isn't the hub's", true),
+            (Reply::Unidentified, "the hub couldn't tell which", true),
             (Reply::Failed, "the node is starting", false),
             (Reply::Login, "https://login.example/a", false),
         ] {
@@ -428,6 +466,33 @@ mod bridge_tests {
             }
             daemon.abort();
         }
+    }
+
+    /// A machine the hub doesn't admit is told its ID, and where to add it.
+    #[test]
+    fn a_refused_machine_is_told_what_to_add_where() {
+        assert_eq!(
+            not_allowed("nExample2CNTRL"),
+            "the hub refused this machine's tailnet node, nExample2CNTRL; add it to \
+             musubi.tailnet.allow on the hub's machine"
+        );
+    }
+
+    /// Commands and daemons of other builds read a reply by its byte, so each keeps its own.
+    #[test]
+    fn replies_keep_their_bytes() {
+        let bytes = Reply::ALL.map(|reply| (reply, reply as u8));
+        assert_eq!(
+            bytes,
+            [
+                (Reply::Open, 0),
+                (Reply::Failed, 1),
+                (Reply::Refused, 2),
+                (Reply::Login, 4),
+                (Reply::NotAllowed, 3),
+                (Reply::Unidentified, 5),
+            ]
+        );
     }
 
     /// Only an answer of another build is taken for one.

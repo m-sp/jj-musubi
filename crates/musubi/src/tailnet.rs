@@ -3,7 +3,8 @@
 //! A hub's address on a tailnet is `tailnet:<node ID>@<IPv4 address>`. The tailnet's access
 //! controls, which a node enforces on every packet it receives, are a hub's whole access
 //! control over it, as ssh's restricted key is over ssh: a hub admits whatever they let reach
-//! it, and a machine talks only to the node its hub's address names (`gate`).
+//! it, or only the node IDs `musubi.tailnet.allow` lists, if it is set, and a machine talks
+//! only to the node its hub's address names (`gate`).
 //! `musubi_transport::heartbeat` tells a dead link, which tailscale-rs doesn't.
 //!
 //! Upstream's processes hold the nodes, and no other: on a machine, the daemon (`bridge`),

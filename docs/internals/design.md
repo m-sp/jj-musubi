@@ -1135,24 +1135,28 @@ the daemon.
 ssh's restricted key is the whole of a hub's access control over ssh; over a tailnet, the
 tailnet's access controls are. tailscale-rs enforces the packet filter the control server
 sends on every packet a device receives (`ts_dataplane::DataPlane::process_inbound`), and
-drops everything until the first filter arrives, so the hub admits whatever reaches its port
-and doesn't identify it, trusting a reused address as far as the packet filter does: it and
-the source filter take each update from the control server on their own, so for a moment a
-device that has just taken another's address may be judged by the other's rules. Tailscale's
-default policy lets every device reach every other, so the setup guide has the user replace
-it.
+drops everything until the first filter arrives, so without `musubi.tailnet.allow` the hub
+admits whatever reaches its port and doesn't identify it, trusting a reused address as far
+as the packet filter does: it and the source filter take each update from the control
+server on their own, so for a moment a device that has just taken another's address may be
+judged by the other's rules. Tailscale's default policy lets every device reach every other,
+so the setup guide has the user replace it.
 
-A machine does identify its hub. A device is known by its stable node ID, which the
-tailnet's control server assigns and no device chooses, unlike its name, and a hub's address
-names it. tailscale-rs drops a packet whose inner source address isn't routed to the
-WireGuard peer that sent it, so the address a connection goes to says which device answers,
-as long as the lookup by address and the source filter, which goes by accepted routes,
-agree: the gate (`crates/musubi/src/tailnet/gate.rs`) requires exactly one peer to own and
-to be routed the address, with a key that hasn't expired and a home relay, and that peer to
-be the one the address names, before connecting and after. It identifies the hub again every
-5 seconds, ending a link at once whose address has passed to another device. A lookup the
-device doesn't answer, as when it is busy, ends a link only once it has gone on not
-answering for as long as a silent peer would.
+A machine identifies its hub, and a hub with `musubi.tailnet.allow` set identifies each
+machine. A device is known by its stable node ID, which the tailnet's control server assigns
+and no device chooses, unlike its name, and a hub's address names it. tailscale-rs drops a
+packet whose inner source address isn't routed to the WireGuard peer that sent it, so the
+address a connection comes from, or goes to, says which device it is, as long as the lookup
+by address and the source filter, which goes by accepted routes, agree: the gate
+(`crates/musubi/src/tailnet/gate.rs`) requires exactly one peer to own and to be routed the
+address, with a key that hasn't expired and a home relay. A machine requires that peer to be
+the one its hub's address names, before connecting and after; a hub requires the list to
+name it. Each identifies the device again every 5 seconds, and a hub at each change to the
+list, which it rereads, ending a connection at once whose address has passed to another
+device, or which the list no longer admits. A connection made while no list was set ends
+when one is, and its machine connects again, to be checked. A lookup the device doesn't
+answer, as when it is busy, ends a connection only once it has gone on not answering for as
+long as a silent peer would.
 
 That source check, and with it the packet filter, which goes by source address, holds only
 while tailscale-rs's bookkeeping does: after a panic in its peer tracker, which kameo
@@ -1178,13 +1182,17 @@ header are one round trip to the device's network stack, not two.
 tailscale-rs never frees a socket whose peer has gone, nor one whose connect was given up
 on: each holds 128 KiB, and retransmits, for the life of the device. So connects are never
 cancelled, and one at a time goes to each address. Every connection that may have been
-stranded so counts, whether it was carried or turned away: a peer told there is no hub is
-waited for to close, and counts only if it doesn't. A device is replaced, which frees
-them all, once 64 have been counted; once it has reached nothing for five minutes with
-nothing using it, which on a machine means its hub didn't answer, while a hub's client going
-silent, as one asleep does, is the client's doing; after the machine sleeps for over a
-minute; and when it stops answering for five minutes. A hub serves at most 256 connections at
-once, and drops more unanswered, though they still count.
+stranded so counts, whether it was carried, turned away or refused: a refused peer, or one
+told there is no hub, is waited for to close, and counts only if it doesn't. A device is
+replaced, which frees them all, once 64 have been counted; once it has reached nothing for
+five minutes with nothing using it, which on a machine means its hub didn't answer, while a
+hub's client going silent, as one asleep does, is the client's doing; after the machine
+sleeps for over a minute; and when it stops answering for five minutes. A hub serves at most
+256 connections at once, and drops more unanswered, though they still count. A device that
+the tailnet lets reach a hub's port, but that the list doesn't admit, can still have the
+hub's device replaced, with 64 connections it never closes: past 16 refusals in ten minutes,
+its connections are dropped unanswered, which spares the hub the work and its log the lines,
+though they still count. Only the tailnet's access controls keep such a device away.
 
 tailscale-rs re-handshakes only from a side that sends, so a client could keep sending into
 a session the hub's replaced device no longer has, for up to three minutes: a hub's new

@@ -1,5 +1,5 @@
-//! Which node a machine takes for its hub over a tailnet, and serving what reaches a hub's
-//! port, which the tailnet's access controls let through.
+//! Which node a machine takes for its hub over a tailnet, and which of what reaches a hub's
+//! port, which the tailnet's access controls let through, the hub admits.
 //!
 //! tailscale-rs 0.7.1 drops a packet whose inner source address isn't routed to the WireGuard
 //! peer that sent it (`ts_dataplane::DataPlane::process_inbound`), so the address a connection
@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
+use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -26,12 +27,14 @@ use musubi_transport::heartbeat::Ended;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt as _;
 use tokio::io::AsyncWrite;
+use tokio::sync::watch;
 
 use super::address::Address;
+use super::address::Allowed;
 use super::address::NodeId;
 
-/// How often a hub's node is identified again, so that a link to one removed from the
-/// tailnet, or whose address has passed to another, ends.
+/// How often a connection's node is identified again, so that one removed from the tailnet,
+/// or whose address has passed to another, loses the connection.
 const RECHECK: Duration = Duration::from_secs(5);
 
 /// How long a caller waits to be connected and answered: less than the 15 seconds `musubi
@@ -156,8 +159,15 @@ async fn who<N: Tailnet>(net: &N, ip: Ipv4Addr) -> Result<NodeId, Unidentified> 
 /// How a connection to or from a hub went.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Served {
+    /// Turned away, for this reason, and how its connection ended: the peer, told, should
+    /// close it, and one that doesn't may leave its socket for good.
+    Refused {
+        why: String,
+        ended: Ended,
+    },
     NoHub(Ended),
-    /// The hub's address stopped being its node's.
+    /// The node at the other end stopped being the one its address names, or one the hub
+    /// admits.
     Revoked,
     Ended(Ended),
 }
@@ -169,11 +179,55 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     L: AsyncRead + AsyncWrite + Unpin,
 {
+    carry_listed(net, ip, node, stream, local, None).await
+}
+
+/// Carries `local` over `stream` for as long as `ip` is still `node`, and, on a hub, for as
+/// long as `allowed` admits it: a list that is unset now admits it too.
+async fn carry_listed<N, S, L>(
+    net: &N,
+    ip: Ipv4Addr,
+    node: &NodeId,
+    stream: S,
+    local: L,
+    allowed: Option<watch::Receiver<Option<Allowed>>>,
+) -> Served
+where
+    N: Tailnet,
+    S: AsyncRead + AsyncWrite + Unpin,
+    L: AsyncRead + AsyncWrite + Unpin,
+{
     let changed = async {
+        let mut allowed = allowed;
         // Since when looking the node up has failed, with no answer since.
         let mut failing = None;
         loop {
-            tokio::time::sleep(RECHECK).await;
+            let allow_changed = async {
+                match &mut allowed {
+                    // A list that can no longer change: as it was.
+                    Some(allowed) => {
+                        if allowed.changed().await.is_err() {
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                () = tokio::time::sleep(RECHECK) => {}
+                () = allow_changed => {}
+            }
+            if let Some(allowed) = &allowed
+                && allowed
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|listed| !listed.admits(node))
+            {
+                tracing::info!(
+                    "musubi.tailnet.allow no longer lists {node}; ending its connection"
+                );
+                return;
+            }
             match who(net, ip).await {
                 Ok(now) if now == *node => failing = None,
                 Ok(now) => {
@@ -202,17 +256,66 @@ where
     }
 }
 
-/// Serves what connected to a hub's port. The tailnet's access controls, which the node
-/// enforces on every packet it receives, decided that it may: the hub admits whatever they
-/// let through.
-pub async fn serve_peer<S, L>(
-    mut stream: S,
-    open_hub: impl AsyncFnOnce() -> io::Result<L>,
+/// Carries `local` over `stream`, from `from`, which no list was set to check, until one is.
+async fn carry_unlisted<S, L>(
+    from: IpAddr,
+    stream: S,
+    local: L,
+    mut allowed: watch::Receiver<Option<Allowed>>,
 ) -> Served
 where
     S: AsyncRead + AsyncWrite + Unpin,
     L: AsyncRead + AsyncWrite + Unpin,
 {
+    let listed = async {
+        if allowed.wait_for(Option::is_some).await.is_err() {
+            // A list that can no longer change: as it was.
+            std::future::pending::<()>().await;
+        }
+        tracing::info!(
+            "musubi.tailnet.allow is set now; ending the connection from {from}, which it \
+             didn't check"
+        );
+    };
+    tokio::select! {
+        ended = heartbeat::relay(stream, local) => Served::Ended(ended),
+        () = listed => Served::Revoked,
+    }
+}
+
+/// Serves what connected to a hub's port from `from`. The tailnet's access controls, which the
+/// node enforces on every packet it receives, let it through. If `allowed` lists nodes,
+/// nothing of it reaches the hub, not even a connection, unless it is a node the list names.
+/// `admitted` hears of what is admitted.
+pub async fn serve_peer<N, S, L>(
+    net: &N,
+    allowed: &watch::Receiver<Option<Allowed>>,
+    mut stream: S,
+    from: IpAddr,
+    open_hub: impl AsyncFnOnce() -> io::Result<L>,
+    admitted: impl FnOnce(),
+) -> Served
+where
+    N: Tailnet,
+    S: AsyncRead + AsyncWrite + Unpin,
+    L: AsyncRead + AsyncWrite + Unpin,
+{
+    let listed = allowed.borrow().clone();
+    let identified = match (listed, from) {
+        (None, _) => Ok(None),
+        // The listener's is an IPv4 address.
+        (Some(_), IpAddr::V6(_)) => {
+            Err((Answer::Unidentified, format!("{from} is an IPv6 address")))
+        }
+        (Some(listed), IpAddr::V4(ip)) => match who(net, ip).await {
+            Ok(node) if listed.admits(&node) => Ok(Some((ip, node))),
+            Ok(node) => Err((
+                Answer::NotAllowed,
+                format!("musubi.tailnet.allow doesn't list {node}"),
+            )),
+            Err(why) => Err((Answer::Unidentified, why.to_string())),
+        },
+    };
     let answer = async |stream: &mut S, answer: Answer| match tokio::time::timeout(
         ANSWER,
         answer.send(stream),
@@ -222,6 +325,15 @@ where
         Ok(sent) => sent.is_ok(),
         Err(_) => false,
     };
+    let identified = match identified {
+        Ok(identified) => identified,
+        Err((refusal, why)) => {
+            answer(&mut stream, refusal).await;
+            let ended = until_closed(&mut stream).await;
+            return Served::Refused { why, ended };
+        }
+    };
+    admitted();
     let local = match open_hub().await {
         Ok(local) => local,
         Err(err) => {
@@ -233,7 +345,12 @@ where
     if !answer(&mut stream, Answer::Welcome).await {
         return Served::Ended(Ended::Closed);
     }
-    Served::Ended(heartbeat::relay(stream, local).await)
+    match identified {
+        None => carry_unlisted(from, stream, local, allowed.clone()).await,
+        Some((ip, node)) => {
+            carry_listed(net, ip, &node, stream, local, Some(allowed.clone())).await
+        }
+    }
 }
 
 /// Waits for a peer that has been answered, and should close, to close: one that doesn't may
@@ -254,6 +371,13 @@ async fn until_closed(stream: &mut (impl AsyncRead + Unpin)) -> Ended {
 /// Why a hub wasn't reached.
 #[derive(Debug)]
 pub enum DialError {
+    /// The hub doesn't admit this machine, `own`.
+    NotAllowed {
+        own: NodeId,
+    },
+    /// The hub couldn't tell which node this machine is, as it must before it admits only
+    /// some.
+    NotIdentified,
     NoHub,
     /// Another node has the hub's address.
     OtherNode {
@@ -276,6 +400,16 @@ pub enum DialError {
 impl fmt::Display for DialError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NotAllowed { own } => write!(
+                f,
+                "the hub refused this machine: add {own} to musubi.tailnet.allow on the hub's \
+                 machine"
+            ),
+            Self::NotIdentified => f.write_str(
+                "the hub couldn't tell which tailnet node this machine is, to check it against \
+                 musubi.tailnet.allow; if trying again in a minute doesn't help, the log on the \
+                 hub's machine says why",
+            ),
             Self::NoHub => f.write_str("no hub is running there"),
             Self::OtherNode { hub, found } => write!(
                 f,
@@ -307,14 +441,16 @@ impl std::error::Error for DialError {}
 /// it, and only one is made at a time to each address, which the next callers wait behind.
 pub struct Dialer<N> {
     net: Arc<N>,
+    own: NodeId,
     connecting: Mutex<HashMap<Ipv4Addr, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl<N: Tailnet> Dialer<N> {
-    /// A dialer for `net`.
-    pub fn new(net: Arc<N>) -> Self {
+    /// A dialer for `net`, whose own ID is `own`.
+    pub fn new(net: Arc<N>, own: NodeId) -> Self {
         Self {
             net,
+            own,
             connecting: Mutex::default(),
         }
     }
@@ -338,7 +474,11 @@ impl<N: Tailnet> Dialer<N> {
         self.check(hub).await?;
         match Answer::read(&mut stream).await.map_err(failed)? {
             Answer::Welcome => Ok(stream),
+            Answer::NotAllowed => Err(DialError::NotAllowed {
+                own: self.own.clone(),
+            }),
             Answer::NoHub => Err(DialError::NoHub),
+            Answer::Unidentified => Err(DialError::NotIdentified),
         }
     }
 

@@ -1,5 +1,6 @@
 //! Node IDs, and a hub's address on a tailnet, `tailnet:<node ID>@<IPv4 address>`.
 
+use std::collections::BTreeSet;
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -22,7 +23,7 @@ impl FromStr for NodeId {
     type Err = anyhow::Error;
 
     /// Refuses what can't be one, as a name with a `-` or a `.`, an address or a tag, so
-    /// that a hub's address with one is refused.
+    /// that a hub's address with one is refused, and a list with one admits nobody.
     fn from_str(id: &str) -> anyhow::Result<Self> {
         anyhow::ensure!(
             id.len() > 1 && id.starts_with('n') && id.bytes().all(|b| b.is_ascii_alphanumeric()),
@@ -67,6 +68,27 @@ impl fmt::Display for Address {
     }
 }
 
+/// The nodes that may use a hub: none, unless listed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Allowed(BTreeSet<NodeId>);
+
+impl Allowed {
+    /// The nodes `musubi.tailnet.allow` lists. One entry that isn't a node ID fails it all,
+    /// rather than being passed over.
+    pub fn parse(entries: &[String]) -> anyhow::Result<Self> {
+        entries
+            .iter()
+            .map(|entry| entry.parse())
+            .collect::<anyhow::Result<_>>()
+            .map(Self)
+            .map_err(|err: anyhow::Error| err.context("bad entry in musubi.tailnet.allow"))
+    }
+
+    pub fn admits(&self, node: &NodeId) -> bool {
+        self.0.contains(node)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +116,25 @@ mod tests {
         ] {
             assert!(Address::parse(hub).unwrap().is_err(), "{hub}");
         }
+    }
+
+    #[test]
+    fn only_node_ids_can_be_allowed() {
+        for entry in [
+            "",
+            "n",
+            "*",
+            "laptop",
+            "nas.example.ts.net",
+            "tag:musubi",
+            "100.64.0.2",
+            "nExample1CNTRL ",
+        ] {
+            assert!(Allowed::parse(&[entry.to_owned()]).is_err(), "{entry:?}");
+        }
+        let allowed = Allowed::parse(&["nExample1CNTRL".to_owned()]).unwrap();
+        assert!(allowed.admits(&"nExample1CNTRL".parse().unwrap()));
+        assert!(!allowed.admits(&"nExample2CNTRL".parse().unwrap()));
+        assert!(!Allowed::default().admits(&"nExample1CNTRL".parse().unwrap()));
     }
 }

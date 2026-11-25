@@ -140,6 +140,30 @@ hive on it ([SECURITY.md](../../SECURITY.md)).
 3. On each other machine, join with that address. The first time, the daemon's device may
    ask for a login too, at a URL `musubi join` prints.
 
+To admit only some of the devices the access controls let through, list their IDs in
+`musubi.tailnet.allow` on the hub's machine. The hub refuses a machine the list doesn't name,
+which says its ID:
+
+```text
+Error: the hub refused this machine's tailnet node, nExample2CNTRL
+Hint: Add nExample2CNTRL to `musubi.tailnet.allow` on the hub's machine, then run this again.
+```
+
+A machine the list does name can still be told `the hub couldn't tell which tailnet node this
+machine is`, as when its device has only just connected: try again in a minute, and if that
+doesn't help, see [Troubleshooting](../troubleshooting.md#over-a-tailnet).
+
+`jj config set` sets the whole list, so give every ID the hub should admit, or edit the list
+with `jj config edit --user`:
+
+```sh
+jj config set --user musubi.tailnet.allow '["nExample2CNTRL", "nExample3CNTRL"]'
+```
+
+The hub picks the change up within seconds, without a restart. Taking an ID out ends that
+machine's connections, and setting the list ends those it didn't check, whose machines
+connect again to be checked.
+
 Over a tailnet, this machine's daemon reaches the hub for every command: commands other than
 `create`, `join` and `clone`, which start it, fail while it is stopped. The hub's address
 names its device's ID, so whoever takes its IP address later isn't taken for it. Its keys are

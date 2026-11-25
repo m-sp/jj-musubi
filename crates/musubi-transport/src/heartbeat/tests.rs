@@ -185,7 +185,7 @@ async fn only_this_version_answers() {
         answer.send(&mut said).await.unwrap();
         assert_eq!(Answer::read(&mut said.as_slice()).await.unwrap(), answer);
     }
-    for said in [&b"musubi-tailnet-2\n\0"[..], b"musubi-tailnet-1\n\x03"] {
+    for said in [&b"musubi-tailnet-2\n\0"[..], b"musubi-tailnet-1\n\x04"] {
         let err = Answer::read(&mut &said[..]).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
@@ -269,4 +269,19 @@ async fn a_suspended_hub_fails_the_requests_in_flight() {
     assert!(matches!(err, TransportError::Disconnected), "{err:?}");
     assert!(began.elapsed() <= SILENCE + Duration::from_secs(1));
     assert!(!far.is_finished());
+}
+
+/// Machines and hubs of other builds read an answer by its byte, so each keeps its own.
+#[test]
+fn answers_keep_their_bytes() {
+    let bytes = Answer::ALL.map(|answer| (answer, answer as u8));
+    assert_eq!(
+        bytes,
+        [
+            (Answer::Welcome, 0),
+            (Answer::NoHub, 2),
+            (Answer::NotAllowed, 1),
+            (Answer::Unidentified, 3),
+        ]
+    );
 }
